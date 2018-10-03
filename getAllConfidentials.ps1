@@ -21,10 +21,26 @@ function Get-ConnectionDetails
         {
 	    $full = Read-Host "Yes or No"
         }
-     
+    Write-Host "Do you want save data to list or CSV file?"
+    $type = Read-Host "List or CSV"
+    
+            while("list","csv" -notcontains $type)
+            {
+            $type = Read-Host "List or CSV"
+            } 
+    if ($type -Contains "list") {
+        Write-Hotst "------Saving data to list selected------"
+        $desSiteUrl = Read-Host -Prompt 'Provide destination site URL'
+        $createList = Read-Host -Prompt 'Provide destination list Title'
+        $CSV = $false
+    }    
+    else{
+        $CSV = $true
+    }    
+
         If($full -Contains "y")
         { 
-            Write-Host "Full scan selected:"
+            Write-Host "------Full scan selected------"
             Write-Host "Provide your tenant admin Url"
             Write-Host "Example: DomainName-admin.sharepoint.com"
             $tenantUrl = Read-Host -Prompt 'Tenant URL: '
@@ -39,15 +55,27 @@ function Get-ConnectionDetails
     foreach ($siteUrl in $sites){
         Get-SPOAllWeb -Username $userName -secPassword $secPassword -siteUrl $siteUrl -path $path
     }
-    Write-Host "Saving of list and sites finished"
-        Get-ListsDetails -userName $userName -secPassword $secPassword -path $path
+        Write-Host "-----Saving of list and sites finished----"
+        if($CSV){
+           Get-ListsDetails -userName $userName -secPassword $secPassword -path $path
+        }
+        else
+        {
+            Get-ListItems -siteUrl $siteUrl -userName $userName -secPassword $secPassword -listTitle $listTitle -path $path  -createList $createList -desSiteUrl $desSiteUrl
+        }
+
         } 
         else
         {
-            Write-Host "Single list scan selected:"
+            Write-Host "------Single list scan selected------"
             $SiteUrl = Read-Host -Prompt 'Provide site URL'
             $listTitle = Read-Host -Prompt 'Provide list Title'
+            if($CSV){
             Get-ListItems -siteUrl $siteUrl -userName $userName -secPassword $secPassword -listTitle $listTitle -path $path 
+            }
+            else{
+            Get-ListItems -siteUrl $siteUrl -userName $userName -secPassword $secPassword -listTitle $listTitle -path $path  -createList $createList  -desSiteUrl $desSiteUrl
+            }
             
         } 
 }
@@ -65,9 +93,8 @@ function Get-SPOAllWeb
     [Parameter(Mandatory=$true,Position=4)]
 	[ValidateNotNullOrEmpty()]	[string]$path
         )
-          
- $ctx=New-Object Microsoft.SharePoint.Client.ClientContext($siteUrl)
-  $ctx.Credentials = New-Object Microsoft.SharePoint.Client.SharePointOnlineCredentials($Username, $secPassword)
+    $ctx = Create-SPOContext  -siteUrl $siteUrl -userName $userName -secPassword  $secPassword      
+
   $ctx.Load($ctx.Web.Webs)
   $ctx.Load($ctx.Web)
   try{
@@ -88,7 +115,7 @@ function Get-SPOAllWeb
   }
 }
 catch{
-
+    Write-Output $_.Exception.GetType().FullName, $_.Exception.Message
 }
 }
 
@@ -140,7 +167,9 @@ function Get-ListsDetails
         [Parameter(Mandatory=$true, Position=1)]
         [ValidateNotNullOrEmpty()] [SecureString] $secPassword,
         [Parameter(Mandatory=$true, Position=2)]
-        [ValidateNotNullOrEmpty()] [string] $path
+        [ValidateNotNullOrEmpty()] [string] $path,
+        [Parameter(Mandatory=$false, Position=3)]
+        [ValidateNotNullOrEmpty()] [string] $createList
     )    
     $csvFile = $path+"\ListItems.csv"
     $table = Import-Csv $csvFile
@@ -153,8 +182,12 @@ function Get-ListsDetails
             Write-Host "Current site" $siteUrl
         }
         Write-Host "Looking for items in: " $listTitle
-
+        if(-not ([string]::IsNullOrEmpty($createList)) ){
         Get-ListItems -siteUrl $siteUrl -Username $userName -secPassword $secPassword -listTitle $listTitle -path $path
+        }
+        else{
+        Get-ListItems -siteUrl $siteUrl -userName $userName -secPassword $secPassword -listTitle $listTitle -path $path  -createList $createList 
+        }
         $oldSiteUrl = $siteUrl
     }
 }
@@ -173,13 +206,16 @@ function Get-ListItems
         [Parameter(Mandatory=$true, Position=3)]
         [ValidateNotNullOrEmpty()] [string] $listTitle,
         [Parameter(Mandatory=$true, Position=4)]
-        [ValidateNotNullOrEmpty()] [string] $path
+        [ValidateNotNullOrEmpty()] [string] $path,
+        [Parameter(Mandatory=$false, Position=5)]
+        [string] $createList,
+        [Parameter(Mandatory=$false, Position=5)]
+        [string] $desSiteUrl
+
     )
-        $path = $path+"\Items.csv"    
-        $ctx=New-Object Microsoft.SharePoint.Client.ClientContext($siteUrl)
-        $ctx.Credentials = New-Object Microsoft.SharePoint.Client.SharePointOnlineCredentials($userName, $secPassword)      
-        
-        
+        $path = $path+"\Items.csv" 
+        $ctx = Create-SPOContext  -siteUrl $siteUrl -userName $userName -secPassword  $secPassword   
+         
         #Get the List
         $List = $ctx.web.Lists.GetByTitle($listTitle)
         $qry = New-Object Microsoft.SharePoint.Client.CamlQuery
@@ -201,6 +237,10 @@ function Get-ListItems
                             ItemURL=$item["FileRef"] 
                             ItemList=$listTitle
                        }
+            if(-not ([string]::IsNullOrEmpty($createList)) )
+            {          
+            Create-ListItem -desSiteUrl $desSiteUrl -userName $userName -secPassword  $secPassword -listTitle $createList -itemTitle $item["FileLeafRef"] -itemUrl $item["FileRef"] 
+             }     
         }
         else {
              
@@ -212,14 +252,79 @@ function Get-ListItems
                             ItemList=$listTitle
                         }
             }
-                               
-         $results += New-Object PSObject -Property $details | export-csv -Path $path -NoTypeInformation -Append    
+            if(-not ([string]::IsNullOrEmpty($createList)) )
+            {          
+            Create-ListItem -desSiteUrl $desSiteUrl -userName $userName -secPassword  $secPassword -listTitle $createList -itemTitle $item["Title"] -itemUrl $itemUrl 
+             } 
+
+         if([string]::IsNullOrEmpty($createList)) {                     
+         $results += New-Object PSObject -Property $details | export-csv -Path $path -NoTypeInformation -Append  
+        }  
     }
     }
     catch{
         Write-Output $_.Exception.GetType().FullName, $_.Exception.Message
     }
 
+}
+
+function Create-SPOContext
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory=$true, Position=0)]
+        [ValidateNotNullOrEmpty()] [string] $siteUrl,
+        [Parameter(Mandatory=$true, Position=1)]
+        [ValidateNotNullOrEmpty()] [string] $userName,
+        [Parameter(Mandatory=$true, Position=2)]
+        [ValidateNotNullOrEmpty()] [SecureString] $secPassword
+        
+    )
+
+    $ctx=New-Object Microsoft.SharePoint.Client.ClientContext($siteUrl)
+    $ctx.Credentials = New-Object Microsoft.SharePoint.Client.SharePointOnlineCredentials($userName, $secPassword)     
+
+    return $ctx
+}
+
+function Create-ListItem
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory=$true, Position=0)]
+        [ValidateNotNullOrEmpty()] [string] $desSiteUrl,
+        [Parameter(Mandatory=$true, Position=1)]
+        [ValidateNotNullOrEmpty()] [string] $userName,
+        [Parameter(Mandatory=$true, Position=2)]
+        [ValidateNotNullOrEmpty()] [SecureString] $secPassword,
+        [Parameter(Mandatory=$true, Position=3)]
+        [ValidateNotNullOrEmpty()] [string] $listTitle,
+        [Parameter(Mandatory=$true, Position=4)]
+        [ValidateNotNullOrEmpty()] [string] $itemTitle,
+        [Parameter(Mandatory=$true, Position=5)]
+        [ValidateNotNullOrEmpty()] [string] $itemUrl
+        
+    )
+
+    $ctx = Create-SPOContext -siteUrl $desSiteUrl -userName $userName -secPassword  $secPassword  
+    
+    try{  
+        $lists = $ctx.web.Lists  
+        $list = $lists.GetByTitle($listTitle)  
+        $listItemInfo = New-Object Microsoft.SharePoint.Client.ListItemCreationInformation  
+        $listItem = $list.AddItem($listItemInfo)  
+        $listItem["Title"] = $itemTitle  
+        $listItem["ItemURL"] = $itemUrl + ", Link to item"
+        $listItem.Update()      
+        $ctx.load($list)      
+        $ctx.executeQuery()  
+        Write-Host "Item Added with ID - " $listItem.Id      
+    }  
+    catch{  
+        write-host "$($_.Exception.Message)" -foregroundcolor red  
+    } 
 }
 
 Get-ConnectionDetails
